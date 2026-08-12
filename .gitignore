@@ -1,1 +1,24 @@
-DeepPCB/
+# Datasets are never committed. They are cited in Section 3.2 of the report
+# instead, and the submission ZIP must not contain them.
+data/DeepPCB/
+data/HRIPCB/
+
+# Generated artefacts
+outputs/
+*.csv
+*.png
+!docs/**/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

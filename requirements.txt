@@ -1,0 +1,14 @@
+# BMDS2133 Automated PCB Defect Inspection System
+# Python 3.11. Install with: pip install -r requirements.txt
+#
+# Versions are pinned so that every member's results are reproducible and so
+# that the marker can recreate the environment from the submission ZIP.
+
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84   # contrib build required for SIFT
+scipy==1.13.1                       # phase correlation fallback, distance metrics
+scikit-image==0.24.0                # region descriptors, Hu moments (Module 3)
+pandas==2.2.2                       # metrics CSV export (Module 3)
+matplotlib==3.9.0                   # Chapter 4 result figures (Module 1)
+streamlit==1.36.0                   # inspection dashboard (Module 3)
+pytest==8.2.2                       # unit tests (Module 1, task 1.9)
