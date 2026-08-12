@@ -46,6 +46,7 @@ python -m pytest tests -v
 ## Repository layout
 
 ```
+dashboard.py              Streamlit entry point: streamlit run dashboard.py
 src/
   contracts.py            frozen interfaces between the three modules
   pipeline.py             the orchestrator: Module 1 -> Module 2 -> Module 3
@@ -58,16 +59,38 @@ src/
     difference.py           signed golden-template differencing (done)
     blobs.py                connected-component blob extraction (done)
   module3/                Ng Zhi Xuan
-    classify.py             descriptors, two-stage classifier, verdict
+    descriptors.py          region descriptors and the two-stage rules (done)
+    classify.py             adapter: Blob -> descriptors.py -> Defect (done)
+    pdf_report.py           PDF inspection report export       (done)
     evaluate.py             IoU matching, precision/recall/F1
 tests/                    integration and regression tests
-docs/                     contracts, meeting log, report drafts
+notebooks/                exploratory prototypes, not part of the pipeline
+docs/                     meeting log, working notes
 data/                     datasets (git-ignored, never committed)
 ```
 
 Files marked *(done)* are implemented. The rest are working stubs with fixed
 signatures, so the pipeline runs end to end today and each owner can replace
 their stub without coordinating with anyone else.
+
+Two conventions worth stating, because they are easy to break by accident:
+
+- **Everything the dashboard displays comes from `inspect_pair`.** The
+  dashboard computes no image processing of its own, so what appears on screen
+  is the same result the evaluation harness scores.
+- **`descriptors.py` returns display labels; `classify.py` returns contract
+  labels.** The mapping between the two lives in `DISPLAY_TO_CONTRACT` and
+  nowhere else. Evaluation compares contract labels only.
+
+## Running the dashboard
+
+```bash
+streamlit run dashboard.py
+```
+
+Run it from the repository root so that `src` is importable. If the DeepPCB
+folder is present, the sidebar offers sample pairs directly; otherwise upload a
+template and a test image.
 
 ## Current baseline
 

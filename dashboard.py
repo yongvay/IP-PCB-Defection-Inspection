@@ -1,183 +1,262 @@
-import streamlit as st
+"""Streamlit inspection dashboard — tasks 3.5 and 3.6.
+
+Owner: Ng Zhi Xuan.
+
+Run from the repository root so that the ``src`` package is importable:
+
+    streamlit run dashboard.py
+
+This is the application entry point only. Every algorithm it displays lives in
+``src/``; nothing is computed here that the pipeline does not already compute,
+so what the marker sees on screen is the same result the evaluation harness
+scores. That is the whole reason the mock-data path is no longer the default.
+"""
+
+import tempfile
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pandas as pd
+import streamlit as st
 
-from classifier import process_blobs, calculate_board_ssim
-from pdf_report import generate_pdf_report
+from src.module1.ground_truth import POLARITY
+from src.module1.preprocess import DEEPPCB_PIXELS_PER_MM
+from src.module3.descriptors import calculate_board_ssim
+from src.module3.pdf_report import generate_pdf_report
+from src.pipeline import inspect_pair
 
-# Page Configuration
+REPO_ROOT = Path(__file__).resolve().parent
+PCB_DATA = REPO_ROOT / "data" / "DeepPCB" / "PCBData"
+
+# Copper removed is drawn red, copper added blue. The polarity is not carried
+# on the Defect contract, because it is fully determined by the class, so it is
+# recovered from the same table the ground-truth parser uses rather than being
+# duplicated as a field.
+POLARITY_COLOUR = {"removed": (0, 0, 255), "added": (255, 0, 0)}
+
 st.set_page_config(
     page_title="PCB Defect Inspection Dashboard",
     page_icon="🔍",
-    layout="wide"
+    layout="wide",
 )
 
-st.title("🛡️ Automated PCB Defect Inspection Dashboard")
-st.caption("Mode B: Innovative Solution Development | Module 3: Defect Classification, Measurement & Analysis")
+st.title("Automated PCB Defect Inspection Dashboard")
+st.caption(
+    "BMDS2133 Image Processing · Mode B · "
+    "Module 3: Defect Classification, Measurement & Analysis"
+)
 
-# Sidebar Controls
-st.sidebar.header("⚙️ Inspection Parameters")
-tolerance = st.sidebar.slider("Defect Tolerance (Max Allowed)", 0, 10, 0)
-mm_per_px = st.sidebar.number_input("Spatial Scale (mm/px)", value=0.020, step=0.001, format="%.4f")
-min_area_filter = st.sidebar.slider("Noise Area Filter (px)", 5, 100, 15)
 
-use_mock_data = st.sidebar.checkbox("Use Mock Data Mode (Standalone Test)", value=True)
+# --------------------------------------------------------------------------
+# Input selection
+# --------------------------------------------------------------------------
+def list_sample_pairs(limit: int = 40) -> list[tuple[str, Path, Path]]:
+    """Find template-test pairs already present in the DeepPCB folder."""
+    if not PCB_DATA.exists():
+        return []
+    pairs = []
+    for template in sorted(PCB_DATA.glob("*/*/*_temp.jpg"))[:limit]:
+        test = template.with_name(template.name.replace("_temp.jpg", "_test.jpg"))
+        if test.exists():
+            pairs.append((template.stem.replace("_temp", ""), template, test))
+    return pairs
 
-# Main Inspection Area
-col1, col2 = st.columns(2)
 
-with col1:
-    st.subheader("Reference Board (Golden Template)")
-    template_file = st.file_uploader("Upload Template Image", type=["jpg", "png", "jpeg"], key="template")
+def save_upload(upload) -> str:
+    """Persist an uploaded image to a temporary file.
 
-with col2:
-    st.subheader("Test Board (Inspected Unit)")
-    test_file = st.file_uploader("Upload Test Image", type=["jpg", "png", "jpeg"], key="test")
+    The pipeline is addressed by path rather than by array so that a run from
+    the dashboard and a run from the command line take exactly the same code
+    path, including the image loading in Module 1.
+    """
+    suffix = Path(upload.name).suffix or ".jpg"
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    handle.write(upload.getbuffer())
+    handle.close()
+    return handle.name
+
+
+st.sidebar.header("Inspection parameters")
+
+samples = list_sample_pairs()
+source_options = ["Upload a pair"]
+if samples:
+    source_options.insert(0, "Sample pair from DeepPCB")
+source = st.sidebar.radio("Image source", source_options)
+
+tolerance = st.sidebar.slider("Defect tolerance (maximum allowed)", 0, 10, 0)
+open_kernel = st.sidebar.slider("Morphological opening kernel (px)", 1, 11, 5, step=2)
+min_area = st.sidebar.slider("Minimum blob area (px)", 5, 200, 40, step=5)
+
+st.sidebar.caption(
+    "Opening at 5 x 5 is the verified default. Lowering it to 3 x 3 drops "
+    "precision from 0.93 to 0.28 — see README, finding 3."
+)
+
+template_path = test_path = None
+
+if source == "Sample pair from DeepPCB":
+    labels = [name for name, _, _ in samples]
+    chosen = st.sidebar.selectbox("Board", labels)
+    for name, template, test in samples:
+        if name == chosen:
+            template_path, test_path = str(template), str(test)
+            break
+else:
+    upload_left, upload_right = st.columns(2)
+    with upload_left:
+        st.subheader("Reference board (golden template)")
+        template_file = st.file_uploader(
+            "Template image", type=["jpg", "jpeg", "png"], key="template"
+        )
+    with upload_right:
+        st.subheader("Test board (inspected unit)")
+        test_file = st.file_uploader(
+            "Test image", type=["jpg", "jpeg", "png"], key="test"
+        )
+    if template_file and test_file:
+        template_path = save_upload(template_file)
+        test_path = save_upload(test_file)
 
 st.divider()
 
-# Load images or generate synthetic fallback boards
-template_img = None
-test_img = None
 
-if template_file and test_file:
-    file_bytes_temp = np.asarray(bytearray(template_file.read()), dtype=np.uint8)
-    file_bytes_test = np.asarray(bytearray(test_file.read()), dtype=np.uint8)
-    template_img = cv2.imdecode(file_bytes_temp, cv2.IMREAD_COLOR)
-    test_img = cv2.imdecode(file_bytes_test, cv2.IMREAD_COLOR)
-elif use_mock_data:
-    # Generate synthetic 640x640 PCB board images for standalone demonstration
-    template_img = np.ones((640, 640, 3), dtype=np.uint8) * 230
-    cv2.rectangle(template_img, (100, 100), (540, 540), (180, 180, 180), -1)
-    # Draw traces
-    cv2.line(template_img, (150, 200), (450, 200), (0, 140, 0), 12)
-    cv2.line(template_img, (150, 350), (450, 350), (0, 140, 0), 12)
-    cv2.circle(template_img, (250, 200), 20, (0, 100, 0), -1)
+# --------------------------------------------------------------------------
+# Inspection
+# --------------------------------------------------------------------------
+if not (template_path and test_path):
+    st.info(
+        "Select a sample pair, or upload both a template and a test image, "
+        "to run an inspection."
+    )
+    st.stop()
 
-    test_img = template_img.copy()
-    # Introduce synthetic defects: 1. Open circuit (removed), 2. Spurious copper (added)
-    cv2.rectangle(test_img, (280, 194), (330, 206), (180, 180, 180), -1)  # Broken trace
-    cv2.circle(test_img, (250, 450), 15, (0, 140, 0), -1)  # Extra copper spot
+params = {
+    "max_defects": tolerance,
+    "morph_open_kernel": open_kernel,
+    "morph_close_kernel": open_kernel,
+    "min_blob_area": min_area,
+}
 
-# Mock Blobs Data Contract matching Module 2 output
-mock_blobs = [
-    {
-        "id": 1,
-        "bbox": (280, 194, 50, 12),
-        "contour": np.array([[[280, 194]], [[330, 194]], [[330, 206]], [[280, 206]]]),
-        "area_px": 600,
-        "polarity": "removed"
-    },
-    {
-        "id": 2,
-        "bbox": (235, 435, 30, 30),
-        "contour": np.array([[[235, 435]], [[265, 435]], [[265, 465]], [[235, 465]]]),
-        "area_px": 700,
-        "polarity": "added"
-    }
-]
+with st.spinner("Running the inspection pipeline…"):
+    report = inspect_pair(template_path, test_path, params)
 
-if template_img is not None and test_img is not None:
-    # Calculate SSIM (Practical 9)[cite: 4]
-    ssim_score = calculate_board_ssim(template_img, test_img)
-    
-    # Process Blobs (Task 3.1, 3.2, 3.3, 3.4)[cite: 3]
-    defects, verdict = process_blobs(mock_blobs, mm_per_px, tolerance, min_area_filter)
+template_img = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+test_img = cv2.imread(test_path, cv2.IMREAD_GRAYSCALE)
+ssim_score = calculate_board_ssim(template_img, test_img)
 
-    # Verdict Banner
-    if verdict == "PASS":
-        st.success(f"### 🎉 Inspection Verdict: {verdict} | Total Defects: {len(defects)} (Tolerance: {tolerance})")
-    else:
-        st.error(f"### ⚠️ Inspection Verdict: {verdict} | Total Defects: {len(defects)} (Tolerance: {tolerance})")
+# --- Verdict banner -------------------------------------------------------
+headline = (
+    f"Inspection verdict: {report.verdict} · "
+    f"{len(report.defects)} defect(s) · tolerance {tolerance}"
+)
+(st.success if report.verdict == "PASS" else st.error)(f"### {headline}")
 
-    # Metrics Summary Cards
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Defects", len(defects))
-    m2.metric("Board SSIM Score", f"{ssim_score}")
-    m3.metric("Scale Factor", f"{mm_per_px} mm/px")
-    m4.metric("Status", verdict)
+metric_cols = st.columns(5)
+metric_cols[0].metric("Total defects", len(report.defects))
+metric_cols[1].metric("Board SSIM", f"{ssim_score:.4f}")
+metric_cols[2].metric("Alignment residual", f"{report.align_residual:.3f} px")
+metric_cols[3].metric("Runtime", f"{report.runtime_s:.3f} s")
+metric_cols[4].metric("Status", report.verdict)
 
-    st.spacer = st.empty()
-
-    # Draw Annotated Overlays with Rotated Bounding Boxes (Practical 1 & 8)[cite: 4]
-    overlay_img = test_img.copy()
-    for d in defects:
-        rect = d["rect"]
-        box = cv2.boxPoints(rect)
-        box = np.intp(box)
-
-        # Red for removed copper, Blue for added copper
-        color = (0, 0, 255) if d["Polarity"] == "removed" else (255, 0, 0)
-        cv2.drawContours(overlay_img, [box], 0, color, 2, lineType=cv2.LINE_AA)
-
-        cx, cy = int(rect[0][0]), int(rect[0][1])
-        cv2.putText(
-            overlay_img,
-            f"#{d['ID']}: {d['Class']}",
-            (cx - 30, cy - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 0, 0),
-            2,
-            lineType=cv2.LINE_AA
-        )
-        cv2.putText(
-            overlay_img,
-            f"#{d['ID']}: {d['Class']}",
-            (cx - 30, cy - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            1,
-            lineType=cv2.LINE_AA
-        )
-
-    # Display Visual Comparison
-    img_col1, img_col2 = st.columns(2)
-    with img_col1:
-        st.subheader("Reference Template Board")
-        st.image(template_img, channels="BGR", use_container_width=True)
-
-    with img_col2:
-        st.subheader("Annotated Inspection Result")
-        st.image(overlay_img, channels="BGR", use_container_width=True)
-
-    st.divider()
-
-    # Sortable Defect Log Table & Analytics
-    tbl_col, chart_col = st.columns([6, 4])
-
-    with tbl_col:
-        st.subheader("📋 Sortable Defect Log")
-        if defects:
-            df_defects = pd.DataFrame(defects)
-            # Remove complex object columns for table display
-            df_display = df_defects.drop(columns=["bbox", "rect", "contour"])
-            st.dataframe(df_display, use_container_width=True)
-        else:
-            st.info("No defects present on this board.")
-
-    with chart_col:
-        st.subheader("📊 Defect Class Distribution")
-        if defects:
-            class_counts = df_defects["Class"].value_counts()
-            st.bar_chart(class_counts)
-        else:
-            st.info("Distribution clear.")
-
-    st.divider()
-
-    # Automated PDF Report Download (Extra Effort Feature)[cite: 1, 3]
-    st.subheader("📄 Export Inspection Report")
-    pdf_bytes = generate_pdf_report(defects, verdict, ssim_score, mm_per_px, tolerance)
-    
-    st.download_button(
-        label="📥 Download Official Inspection Report (PDF)",
-        data=pdf_bytes,
-        file_name=f"PCB_Inspection_Report_{verdict}.pdf",
-        mime="application/pdf"
+if report.runtime_s > 3.0:
+    st.warning(
+        "Runtime exceeds the 3 s per board budget set by SMART Objective 3."
     )
 
-else:
-    st.info("Please upload both a Template and Test image or enable 'Use Mock Data Mode' in the sidebar.")
+# --- Annotated overlay ----------------------------------------------------
+overlay = cv2.cvtColor(test_img, cv2.COLOR_GRAY2BGR)
+for defect in report.defects:
+    x, y, w, h = defect.bbox
+    polarity = POLARITY[defect.defect_class]
+    colour = POLARITY_COLOUR[polarity]
+
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), colour, 2, lineType=cv2.LINE_AA)
+    label = f"#{defect.id} {defect.defect_class}"
+    # Drawn twice: a thick dark pass then a thin light pass, so the text stays
+    # readable over both copper and substrate.
+    for thickness, text_colour in ((3, (0, 0, 0)), (1, (255, 255, 255))):
+        cv2.putText(
+            overlay, label, (x, max(12, y - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_colour, thickness,
+            lineType=cv2.LINE_AA,
+        )
+
+image_left, image_right = st.columns(2)
+with image_left:
+    st.subheader("Reference template")
+    st.image(template_img, use_container_width=True)
+with image_right:
+    st.subheader("Annotated inspection result")
+    st.image(overlay, channels="BGR", use_container_width=True)
+
+st.caption("Red: copper removed.  Blue: copper added.")
+
+st.divider()
+
+# --- Defect table and distribution ---------------------------------------
+table_col, chart_col = st.columns([6, 4])
+
+rows = [
+    {
+        "ID": defect.id,
+        "Class": defect.defect_class,
+        "Polarity": POLARITY[defect.defect_class],
+        "Area (mm²)": round(defect.area_mm2, 4),
+        "x": defect.bbox[0],
+        "y": defect.bbox[1],
+        "Width (px)": defect.bbox[2],
+        "Height (px)": defect.bbox[3],
+    }
+    for defect in report.defects
+]
+
+with table_col:
+    st.subheader("Defect log")
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No defects detected on this board.")
+
+with chart_col:
+    st.subheader("Defect class distribution")
+    if rows:
+        st.bar_chart(pd.DataFrame(rows)["Class"].value_counts())
+    else:
+        st.info("Nothing to plot.")
+
+st.divider()
+
+# --- Report export --------------------------------------------------------
+st.subheader("Export inspection report")
+
+# Module 1's calibration factor is applied inside the pipeline and is not
+# carried on the report, so the same constant is used here for the linear
+# dimensions. Task 1.7 replaces the constant with a derived factor, at which
+# point exposing it on InspectionReport is a contract amendment to raise at the
+# weekly checkpoint.
+MM_PER_PX = 1.0 / DEEPPCB_PIXELS_PER_MM
+
+pdf_defects = [
+    {
+        "ID": row["ID"],
+        "Class": row["Class"],
+        "Polarity": row["Polarity"],
+        "Area (mm²)": row["Area (mm²)"],
+        # Bounding-box extent, not the rotated minimum-area box: the contract
+        # carries the axis-aligned box only.
+        "Width (mm)": round(row["Width (px)"] * MM_PER_PX, 3),
+        "Height (mm)": round(row["Height (px)"] * MM_PER_PX, 3),
+    }
+    for row in rows
+]
+
+st.download_button(
+    label="Download inspection report (PDF)",
+    data=generate_pdf_report(
+        pdf_defects, report.verdict, ssim_score, MM_PER_PX, tolerance
+    ),
+    file_name=f"PCB_Inspection_Report_{report.verdict}.pdf",
+    mime="application/pdf",
+)

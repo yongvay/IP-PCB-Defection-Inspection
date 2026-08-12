@@ -54,7 +54,10 @@ def inspect_pair(template_path: str,
     removed = morphology.clean_difference(removed, params)
     added = morphology.clean_difference(added, params)
 
-    candidates = blob_extraction.extract_blobs(removed, added)
+    candidates = blob_extraction.extract_blobs(
+        removed, added,
+        min_area=params.get("min_blob_area", blob_extraction.MIN_BLOB_AREA_PX),
+    )
 
     localisation = LocalisationResult(
         blobs=candidates,
