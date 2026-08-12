@@ -1,0 +1,24 @@
+# Normalise line endings across the team.
+#
+# Zhi Xuan's files were committed with CRLF and the rest of the repository
+# with LF, which made five unmodified files show as fully rewritten in
+# `git status` and would have produced whole-file conflicts on every merge.
+#
+# `text=auto eol=lf` stores every text file with LF in the repository. Git
+# still checks out whatever each member's editor expects, so nobody has to
+# change their setup.
+
+* text=auto eol=lf
+
+# Notebooks are JSON. Diffing them line by line is noise, so they are marked
+# so that Git does not attempt a textual merge.
+*.ipynb -diff merge=binary
+
+# Binary assets: never normalise, never diff.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.docx binary
+*.pptx binary
+*.xlsx binary
