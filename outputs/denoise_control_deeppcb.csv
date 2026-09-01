@@ -1,0 +1,5 @@
+dataset,noise,level,filter,psnr_db,ssim
+deeppcb,salt_pepper,0.03,none,18.258,0.5869
+deeppcb,salt_pepper,0.03,gaussian,21.153,0.6321
+deeppcb,salt_pepper,0.03,median,31.818,0.9944
+deeppcb,salt_pepper,0.03,bilateral,18.925,0.5895

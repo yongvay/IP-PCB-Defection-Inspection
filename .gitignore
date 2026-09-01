@@ -1,13 +1,23 @@
 # Datasets are never committed. They are cited in Section 3.2 of the report
-# instead, and the submission ZIP must not contain them.
-data/DeepPCB/
-data/HRIPCB/
+# instead, and the submission ZIP must not contain them. This is not only
+# policy: data/HRIPCB.zip alone is 1.9 GB, and GitHub rejects any single file
+# over 100 MB, so committing it would fail the push outright.
+data/
 
-# Generated artefacts
-outputs/
+# Generated artefacts are ignored by default...
 *.csv
 *.png
+
+# ...with deliberate exceptions. Figures used in the report live under docs/,
+# and everything under outputs/ is committed so the team can read the metrics
+# and use the figures without rerunning every benchmark first.
 !docs/**/*.png
+!outputs/**/*.csv
+!outputs/**/*.png
+
+# Run logs are noise, not results.
+outputs/*.txt
+*.log
 
 # Python
 __pycache__/
