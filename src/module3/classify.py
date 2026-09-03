@@ -1,24 +1,26 @@
-"""Module 3 contract adapter — classification, measurement and verdict.
+"""Module 3 entry point — classification, measurement and verdict.
 
-Owner: Ng Zhi Xuan (tasks 3.1 to 3.4).
+Owner: Ng Zhi Xuan (tasks 3.2, 3.3, 3.4).
 
-This file is deliberately thin. The real classification work lives in
-``descriptors.py`` and is Zhi Xuan's own code, moved here unchanged from the
-repository root. What this module adds is the translation between that code
-and the frozen interface in ``src/contracts.py``:
+This file is the boundary between the frozen contract in ``src/contracts.py``
+and the two classifiers that decide a defect's class. It does three things and
+delegates everything else:
 
-  * Module 2 emits ``Blob`` dataclasses; ``descriptors.py`` was prototyped
-    against plain dictionaries, so each blob is presented as a mapping.
-  * ``descriptors.py`` returns human-readable labels such as "Open circuit"
-    for display in the dashboard; the contract, the ground-truth parser and
-    the evaluation harness all use the machine labels in ``DEFECT_CLASSES``.
-    Scoring cannot compare the two vocabularies, so the mapping is made once,
-    here, rather than being duplicated wherever a comparison happens.
+1. Presents each ``Blob`` to the rule sets in the dictionary form they expect.
+2. Chooses between the connectivity classifier and the descriptor baseline,
+   and records which one actually decided each defect.
+3. Converts pixel measurements to millimetres and applies the board verdict.
 
-Keeping the translation separate from the rules means the rules stay in one
-file with one author, which matters because understanding of code is assessed
-individually and live.
+Two vocabularies, one translation
+---------------------------------
+``descriptors.py`` and ``connectivity.py`` return human-readable labels such as
+"Open circuit" for the dashboard and the PDF report. The contract, the
+ground-truth parser and the evaluation harness all use the machine labels in
+``DEFECT_CLASSES``. Scoring cannot compare the two vocabularies, so the mapping
+is made once, here, rather than being duplicated wherever a comparison happens.
 """
+
+from __future__ import annotations
 
 import time
 from typing import Any
@@ -30,12 +32,13 @@ from src.contracts import (
     InspectionReport,
     LocalisationResult,
 )
-from src.module3 import descriptors
+from src.module3 import connectivity, descriptors
+from src.module3.connectivity import BoardContext
 
-# Display label (descriptors.py, dashboard, PDF report) -> contract label
-# (contracts.py, ground_truth.py, evaluate.py). Every value on the right must
-# appear in DEFECT_CLASSES; the assertion below enforces that at import time
-# rather than letting a typo surface as a silent scoring failure in Week 6.
+# Display label (classifiers, dashboard, PDF report) -> contract label
+# (contracts.py, ground_truth.py, evaluate.py). The assertion below enforces
+# agreement at import time rather than letting a typo surface as a silent
+# scoring failure in Week 6.
 DISPLAY_TO_CONTRACT = {
     "Open circuit": "open_circuit",
     "Mouse bite": "mouse_bite",
@@ -49,86 +52,202 @@ assert set(DISPLAY_TO_CONTRACT.values()) == set(DEFECT_CLASSES), (
     "Display labels and DEFECT_CLASSES have drifted apart"
 )
 
-# Board fails if more than this many defects are found. Task 3.4 replaces this
-# with a configurable severity-weighted rule.
+CONTRACT_TO_DISPLAY = {value: key for key, value in DISPLAY_TO_CONTRACT.items()}
+
+# Which classifier runs by default. "connectivity" reads how the region sits
+# against the surrounding copper and falls back to the descriptor rules when
+# that reading is unusable; "descriptor" is the shape-only baseline retained
+# for the Chapter 4 comparison. Overridden per run via params["classifier"].
+DEFAULT_CLASSIFIER = "connectivity"
+
+# ---------------------------------------------------------------------------
+# Task 3.4 — severity weighting
+# ---------------------------------------------------------------------------
+# A defect count alone treats a bridged pair of traces as equivalent to a
+# cosmetic nick on a trace edge, which no inspection operator would accept.
+# The weights below follow the electrical consequence of each class rather than
+# its visual prominence:
+#
+#   3  the board cannot work — the net is broken or two nets are joined
+#   2  the board works now but a stray island is a latent bridge risk
+#   1  the board works and the trace is narrowed but continuous
+#
+# The scale is ordinal, not a probability of failure, and Chapter 4 should
+# present it as an engineering convention adopted for the demonstration rather
+# than as a measured reliability model.
+SEVERITY = {
+    "open_circuit": 3,
+    "short": 3,
+    "spurious_copper": 2,
+    "mouse_bite": 1,
+    "spur": 1,
+    "pin_hole": 1,
+}
+
+# Any defect at or above this weight fails the board on its own, however
+# generous the count tolerance is.
+CRITICAL_SEVERITY = 3
+
+# Default count tolerance. Zero means a board fails on any defect at all, which
+# is the correct default for bare-board inspection.
 DEFAULT_MAX_DEFECTS = 0
 
-# The stage-two rules are hard thresholds on aspect ratio and solidity, so they
-# produce a decision but no graded score. A fixed value is used rather than an
-# invented one, and it is not reported as a probability anywhere.
-#
-# TODO (task 3.2): derive a real confidence, for example the margin by which a
-# descriptor clears its threshold, so that borderline blobs can be flagged.
-PLACEHOLDER_CONFIDENCE = 0.5
 
-
+# ---------------------------------------------------------------------------
+# Task 3.1 to 3.2 — describing and classifying one blob
+# ---------------------------------------------------------------------------
 def as_mapping(blob: Blob) -> dict[str, Any]:
-    """Present a Blob in the dictionary form ``descriptors.py`` expects.
+    """Present a ``Blob`` in the dictionary form the rule sets expect.
 
-    The prototype in ``notebooks/prototyping.ipynb`` was written against a mock
-    dictionary before Module 2 existed. Adapting here rather than rewriting the
-    rules keeps that prototype and this pipeline in agreement.
+    The rules were prototyped against plain dictionaries before Module 2
+    existed. Adapting here rather than rewriting them keeps the notebook
+    prototype and this pipeline in agreement, and keeps the rule sets testable
+    without constructing contract objects.
     """
     return {
         "id": blob.id,
         "bbox": blob.bbox,
         "contour": blob.contour,
+        "centroid": blob.centroid,
         "area_px": blob.area_px,
         "polarity": blob.polarity,
     }
 
 
 def describe(blob: Blob) -> dict[str, Any]:
-    """Region descriptors for one blob. (Task 3.1)
-
-    Delegates to ``descriptors.extract_descriptors``: rotated bounding box,
-    aspect ratio, extent, solidity and Hu moments.
-    """
+    """Region descriptors for one blob. (Task 3.1)"""
     return descriptors.extract_descriptors(as_mapping(blob))
 
 
-def classify(blob: Blob) -> tuple[str, float]:
-    """Two-stage rule-based classification into one of the six classes. (Task 3.2)
+def classify(blob: Blob,
+             context: BoardContext | None = None,
+             method: str = DEFAULT_CLASSIFIER) -> tuple[str, float, str]:
+    """Assign one of the six classes to a candidate defect. (Task 3.2)
 
-    Stage one is the polarity already carried by the blob, which comes from the
-    sign of the template-test difference in Module 2 and is not guesswork.
-    Stage two is the descriptor rule set in ``descriptors.classify_defect``.
+    Stage one is the polarity carried by the blob, which comes from the sign of
+    the template-test difference in Module 2 and is measured rather than
+    inferred. Stage two is either rule set.
 
-    The contract label is returned, not the display label.
+    Returns the contract label, a confidence between 0.5 and 1.0, and the name
+    of the rule set that actually decided. The third value matters: the
+    connectivity classifier declines to rule on a region whose copper context
+    cannot be read, and how often that happens is a result Chapter 4 has to
+    report rather than hide behind a silent fallback.
     """
-    measurements = describe(blob)
-    display_label = descriptors.classify_defect(
-        blob.polarity,
-        measurements["aspect_ratio"],
-        measurements["solidity"],
+    features = describe(blob)
+
+    if method == "connectivity" and context is not None:
+        context_features = connectivity.measure_context(as_mapping(blob), context)
+        decision = connectivity.classify_by_connectivity(blob.polarity, context_features)
+        if decision is not None:
+            display_label, confidence = decision
+            return DISPLAY_TO_CONTRACT[display_label], confidence, "connectivity"
+
+    display_label, confidence = descriptors.classify_by_descriptors(
+        blob.polarity, features
     )
-    return DISPLAY_TO_CONTRACT[display_label], PLACEHOLDER_CONFIDENCE
+    return DISPLAY_TO_CONTRACT[display_label], confidence, "descriptor"
 
 
+# ---------------------------------------------------------------------------
+# Task 3.3 — physical measurement
+# ---------------------------------------------------------------------------
 def measure(blob: Blob, mm_per_px: float) -> float:
-    """Convert pixel area to mm^2 using Module 1's calibration factor. (Task 3.3)
+    """Convert a pixel area to square millimetres. (Task 3.3)
 
-    Area scales with the square of a linear factor, hence mm_per_px squared.
+    Area scales with the square of a linear factor, hence ``mm_per_px``
+    squared. A common error is to apply the factor once, which under-reports a
+    defect on a 48 px/mm board by a factor of 48.
     """
-    return blob.area_px * (mm_per_px ** 2)
+    return float(blob.area_px) * (mm_per_px ** 2)
 
 
+def measure_dimensions(features: dict[str, Any],
+                       mm_per_px: float) -> tuple[float, float]:
+    """Physical length and width of a defect, in millimetres. (Task 3.3)
+
+    Taken from the *rotated* minimum-area rectangle rather than the
+    axis-aligned bounding box. A diagonal open circuit two millimetres long
+    would otherwise be reported as roughly 1.4 mm by 1.4 mm, which is not a
+    measurement of anything physical.
+    """
+    return (
+        float(features["width_px"]) * mm_per_px,
+        float(features["height_px"]) * mm_per_px,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4 — board verdict
+# ---------------------------------------------------------------------------
 def decide_verdict(defects: list[Defect],
-                   params: dict[str, Any] | None = None) -> str:
-    """Pass or fail the board against a defect-count tolerance. (Task 3.4)
+                   params: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """Pass or fail the board, and explain why. (Task 3.4)
 
-    TODO (task 3.4): weight the count by severity, so that one short is not
-    treated as equivalent to one cosmetic spur.
+    Three independent conditions can fail a board, checked in this order:
+
+    1. Any single defect at or above ``CRITICAL_SEVERITY``. An open circuit or
+       a short is a functional failure, so no count tolerance can excuse it.
+    2. More defects than ``max_defects``.
+    3. A total severity weight above ``max_severity``, which catches a board
+       carrying many individually tolerable defects.
+
+    The reason is returned alongside the verdict so the dashboard and the PDF
+    report can state *why* a board failed. A bare PASS or FAIL is not an
+    inspection result an operator can act on.
     """
     params = params or {}
-    limit = params.get("max_defects", DEFAULT_MAX_DEFECTS)
-    return "FAIL" if len(defects) > limit else "PASS"
+    max_defects = int(params.get("max_defects", DEFAULT_MAX_DEFECTS))
+    max_severity = params.get("max_severity")
+
+    total_severity = sum(SEVERITY.get(defect.defect_class, 1) for defect in defects)
+    critical = [
+        defect for defect in defects
+        if SEVERITY.get(defect.defect_class, 1) >= CRITICAL_SEVERITY
+    ]
+
+    detail: dict[str, Any] = {
+        "defect_count": len(defects),
+        "total_severity": total_severity,
+        "critical_count": len(critical),
+        "max_defects": max_defects,
+        "max_severity": max_severity,
+    }
+
+    if critical:
+        classes = sorted({defect.defect_class for defect in critical})
+        detail["reason"] = (
+            f"{len(critical)} critical defect(s) present: {', '.join(classes)}"
+        )
+        return "FAIL", detail
+
+    if len(defects) > max_defects:
+        detail["reason"] = (
+            f"{len(defects)} defect(s) exceeds the tolerance of {max_defects}"
+        )
+        return "FAIL", detail
+
+    if max_severity is not None and total_severity > int(max_severity):
+        detail["reason"] = (
+            f"total severity {total_severity} exceeds the limit of {max_severity}"
+        )
+        return "FAIL", detail
+
+    detail["reason"] = (
+        "no defects detected" if not defects
+        else f"{len(defects)} defect(s) within the tolerance of {max_defects}"
+    )
+    return "PASS", detail
 
 
+# ---------------------------------------------------------------------------
+# Assembling the report
+# ---------------------------------------------------------------------------
 def build_report(localisation: LocalisationResult,
                  mm_per_px: float,
                  started_at: float,
-                 params: dict[str, Any] | None = None) -> InspectionReport:
+                 params: dict[str, Any] | None = None,
+                 context: BoardContext | None = None) -> InspectionReport:
     """Turn candidate blobs into the final inspection report.
 
     Called by the orchestrator in ``src/pipeline.py``. Note that noise removal
@@ -136,21 +255,43 @@ def build_report(localisation: LocalisationResult,
     and the minimum-area threshold in Module 2. No further area filter is
     applied here, because filtering in three places makes the effective
     threshold impossible to reason about when tuning.
+
+    ``context`` is optional so that the function still runs when a caller has
+    only a ``LocalisationResult`` — the classifier then falls back to the
+    descriptor baseline for every blob, which is exactly the configuration
+    Chapter 4 reports as the baseline row.
     """
-    defects = []
+    params = params or {}
+    method = params.get("classifier", DEFAULT_CLASSIFIER)
+
+    defects: list[Defect] = []
     for blob in localisation.blobs:
-        defect_class, confidence = classify(blob)
+        features = describe(blob)
+        defect_class, confidence, decided_by = classify(blob, context, method)
+        width_mm, height_mm = measure_dimensions(features, mm_per_px)
+
         defects.append(Defect(
             id=blob.id,
             bbox=blob.bbox,
             defect_class=defect_class,
             area_mm2=measure(blob, mm_per_px),
             confidence=confidence,
+            polarity=blob.polarity,
+            width_mm=width_mm,
+            height_mm=height_mm,
+            severity=SEVERITY.get(defect_class, 1),
+            decided_by=decided_by,
         ))
+
+    verdict, detail = decide_verdict(defects, params)
 
     return InspectionReport(
         defects=defects,
-        verdict=decide_verdict(defects, params),
+        verdict=verdict,
         runtime_s=time.perf_counter() - started_at,
         align_residual=localisation.align_residual,
+        mm_per_px=mm_per_px,
+        verdict_reason=detail["reason"],
+        verdict_detail=detail,
+        classifier=method,
     )

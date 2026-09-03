@@ -23,6 +23,7 @@ from src.module1 import morphology, preprocess
 from src.module2 import blobs as blob_extraction
 from src.module2 import difference, registration
 from src.module3 import classify
+from src.module3.connectivity import BoardContext
 
 
 def inspect_pair(template_path: str,
@@ -67,7 +68,19 @@ def inspect_pair(template_path: str,
     )
 
     # --- Module 3: classification, measurement and verdict ---------------
-    return classify.build_report(localisation, prepared.mm_per_px, started_at, params)
+    # The connectivity classifier decides a defect's class from how its region
+    # sits against the surrounding copper, so it needs both copper masks, not
+    # just the difference blobs. They are built here rather than inside Module
+    # 3 because normalising which pixel value means copper is Module 2's
+    # responsibility and is already solved in difference.copper_mask.
+    context = BoardContext(
+        template_copper=difference.copper_mask(prepared.template_bin),
+        test_copper=difference.copper_mask(alignment.aligned),
+    )
+
+    return classify.build_report(
+        localisation, prepared.mm_per_px, started_at, params, context=context
+    )
 
 
 def main() -> None:

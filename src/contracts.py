@@ -108,13 +108,41 @@ class LocalisationResult:
 # --------------------------------------------------------------------------
 @dataclass
 class Defect:
-    """A classified, physically measured defect."""
+    """A classified, physically measured defect.
+
+    Amendment raised by Ng Zhi Xuan, tasks 3.2 to 3.4. Everything below
+    ``confidence`` is new and every new field carries a default, so existing
+    callers that construct a Defect with the original five arguments continue
+    to work unchanged. Closes open questions 5 and 6 in docs/MEETING_LOG.md.
+    """
 
     id: int
     bbox: tuple[int, int, int, int]
     defect_class: str                 # one of DEFECT_CLASSES
     area_mm2: float
-    confidence: float                 # 0.0 to 1.0
+    confidence: float                 # 0.5 to 1.0, a decision margin not a probability
+
+    # Carried rather than re-derived. The dashboard previously recovered
+    # polarity from the class lookup table in Module 1, which meant a display
+    # concern reached into another member's module for a value Module 2 had
+    # already measured.
+    polarity: Polarity | str = "removed"
+
+    # Physical dimensions from the rotated minimum-area rectangle, not the
+    # axis-aligned bounding box. The dashboard and the PDF report previously
+    # multiplied the axis-aligned box by a hard-coded constant, which
+    # mismeasured every diagonal defect.
+    width_mm: float = 0.0
+    height_mm: float = 0.0
+
+    # Ordinal severity weight used by the verdict rule. See SEVERITY in
+    # src/module3/classify.py.
+    severity: int = 1
+
+    # Which rule set decided this class: "connectivity" or "descriptor". Needed
+    # so that Chapter 4 can report the fallback rate rather than presenting one
+    # classifier's results as though the other never ran.
+    decided_by: str = ""
 
 
 @dataclass
@@ -125,3 +153,16 @@ class InspectionReport:
     verdict: Verdict
     runtime_s: float
     align_residual: float = 0.0
+
+    # Module 1's calibration factor, surfaced so that any consumer can convert
+    # a pixel reading without importing Module 1 or assuming a constant.
+    mm_per_px: float = 0.0
+
+    # A bare PASS or FAIL is not an inspection result an operator can act on,
+    # so the deciding condition travels with it.
+    verdict_reason: str = ""
+    verdict_detail: dict[str, Any] = field(default_factory=dict)
+
+    # Which classifier produced these labels, recorded on the result itself so
+    # that a saved report cannot be misattributed later.
+    classifier: str = ""
