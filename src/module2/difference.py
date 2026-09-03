@@ -57,9 +57,9 @@ def signed_difference(template_bin: np.ndarray,
     template_copper = copper_mask(template_bin, copper_is_dark)
     test_copper = copper_mask(test_bin, copper_is_dark)
 
-    # Copper in the template that is missing from the test image.
+    # Copper in the template that is missing from the test image. = Copper Removed
     removed = cv2.bitwise_and(template_copper, cv2.bitwise_not(test_copper))
-    # Copper in the test image that is not in the template.
+    # Copper in the test image that is not in the template. = Copper Added
     added = cv2.bitwise_and(test_copper, cv2.bitwise_not(template_copper))
 
     return removed.astype(np.uint8), added.astype(np.uint8)
