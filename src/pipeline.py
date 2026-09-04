@@ -48,7 +48,19 @@ def inspect_pair(template_path: str,
     )
 
     # --- Module 2: differencing and blob extraction ----------------------
-    removed, added = difference.signed_difference(prepared.template_bin, alignment.aligned)
+    # Which pixel value means copper is a property of the dataset, not of the
+    # algorithm. DeepPCB is binarised so that copper falls dark; HRIPCB is
+    # colour photography thresholded with adaptive mean, where it falls light.
+    # Hard-coding difference.COPPER_IS_DARK inverted stage one on HRIPCB and
+    # cost 92 points of class accuracy there while leaving localisation
+    # untouched, because inverting the polarity renames the two families
+    # without changing which pixels differ. Diagnosed by
+    # tools/diagnose_polarity.py; raised by Ng Zhi Xuan.
+    copper_is_dark = params.get("copper_is_dark", difference.COPPER_IS_DARK)
+
+    removed, added = difference.signed_difference(
+        prepared.template_bin, alignment.aligned, copper_is_dark=copper_is_dark
+    )
 
     # Morphological cleanup is Module 1's function, called from here so that
     # the tuning stays with its owner while the ordering stays with the spine.
@@ -74,8 +86,8 @@ def inspect_pair(template_path: str,
     # 3 because normalising which pixel value means copper is Module 2's
     # responsibility and is already solved in difference.copper_mask.
     context = BoardContext(
-        template_copper=difference.copper_mask(prepared.template_bin),
-        test_copper=difference.copper_mask(alignment.aligned),
+        template_copper=difference.copper_mask(prepared.template_bin, copper_is_dark),
+        test_copper=difference.copper_mask(alignment.aligned, copper_is_dark),
     )
 
     return classify.build_report(

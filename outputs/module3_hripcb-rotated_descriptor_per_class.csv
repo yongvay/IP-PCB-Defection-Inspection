@@ -1,7 +1,7 @@
 defect_class,support,true_positives,false_positives,false_negatives,precision,recall,f1
-open_circuit,24,0,48,24,0.0,0.0,0.0
-mouse_bite,22,0,2,22,0.0,0.0,0.0
-pin_hole,21,0,16,21,0.0,0.0,0.0
-short,21,0,261,21,0.0,0.0,0.0
-spur,24,0,8,24,0.0,0.0,0.0
-spurious_copper,18,0,31,18,0.0,0.0,0.0
+open_circuit,24,6,255,18,0.023,0.25,0.0421
+mouse_bite,22,2,6,20,0.25,0.0909,0.1333
+pin_hole,21,8,23,13,0.2581,0.381,0.3077
+short,21,1,47,20,0.0208,0.0476,0.029
+spur,24,0,2,24,0.0,0.0,0.0
+spurious_copper,18,0,16,18,0.0,0.0,0.0

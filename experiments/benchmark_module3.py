@@ -89,6 +89,14 @@ DATASETS = ("deeppcb", "hripcb", "hripcb-rotated")
 # unbounded sentinel is used instead. Mirrors benchmark_pipeline.
 IMAGE_SHAPE = {"deeppcb": (640, 640), "hripcb": (10 ** 6, 10 ** 6)}
 
+# Which pixel value means copper, per dataset. DeepPCB is binarised so that
+# copper falls dark; HRIPCB is colour photography thresholded with adaptive
+# mean, where it falls light. Measured with tools/diagnose_polarity.py, which
+# reported 100% polarity agreement on DeepPCB and 5% on HRIPCB before this was
+# separated out. Leaving it hard-coded cost 92 points of class accuracy on
+# HRIPCB while leaving localisation untouched.
+COPPER_IS_DARK = {"deeppcb": True, "hripcb": False}
+
 
 def base_name(dataset: str) -> str:
     """Strip the rotation qualifier to get the underlying dataset key."""
@@ -165,7 +173,8 @@ def run_configuration(pairs: list[ingest.Pair],
 
 def compare_classifiers(pairs: list[ingest.Pair], dataset: str) -> pd.DataFrame:
     """The headline table: the descriptor baseline against connectivity."""
-    baseline = BASELINES[base_name(dataset)]
+    key = base_name(dataset)
+    baseline = {**BASELINES[key], "copper_is_dark": COPPER_IS_DARK[key]}
     rows = []
 
     for classifier in CLASSIFIERS:
@@ -208,7 +217,8 @@ def sweep_ring_width(pairs: list[ingest.Pair], dataset: str) -> pd.DataFrame:
     pixels does not transfer across that gap any more than a structuring
     element does.
     """
-    baseline = BASELINES[base_name(dataset)]
+    key = base_name(dataset)
+    baseline = {**BASELINES[key], "copper_is_dark": COPPER_IS_DARK[key]}
     rows = []
     original = connectivity.RING_WIDTH_PX
 
