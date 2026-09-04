@@ -63,6 +63,14 @@ RING_WIDTH_PX = 4
 # A contact patch smaller than this is a stray pixel from binarisation jitter
 # rather than a trace end, and counting it would turn every mouse bite into an
 # open circuit.
+#
+# This is a pixel *area*, so it does not transfer between datasets of different
+# resolution: it must scale with the square of the linear scale factor. Tuned
+# at DeepPCB's ~48 px/mm. On HRIPCB, at roughly five times that resolution, the
+# equivalent value is around 150, and leaving it at 6 caused single contact
+# arcs to fragment — 12 of 19 mouse bites were read as open circuits and 10 of
+# 21 spurs as shorts, both being one-contact classes misread as two-contact
+# ones. Swept by experiments/benchmark_module3.py in 'contact' mode.
 MIN_CONTACT_PX = 6
 
 # Fraction of the ring that must be copper before the region counts as fully
@@ -94,7 +102,8 @@ class BoardContext:
 
 def measure_context(blob: dict[str, Any],
                     context: BoardContext,
-                    ring_px: int | None = None) -> dict[str, Any]:
+                    ring_px: int | None = None,
+                    min_contact_px: int | None = None) -> dict[str, Any]:
     """Measure how one candidate region sits against the surrounding copper.
 
     Returns ``contact_count`` (how many separate copper patches the region
@@ -112,6 +121,7 @@ def measure_context(blob: dict[str, Any],
     # experiments/benchmark_module3.py would have silently measured the same
     # width five times over.
     ring_px = RING_WIDTH_PX if ring_px is None else ring_px
+    min_contact_px = MIN_CONTACT_PX if min_contact_px is None else min_contact_px
 
     reference = context.reference_for(blob["polarity"])
     height, width = reference.shape[:2]
@@ -152,7 +162,7 @@ def measure_context(blob: dict[str, Any],
     count, _, stats, _ = cv2.connectedComponentsWithStats(contact, connectivity=8)
     contact_count = sum(
         1 for label in range(1, count)
-        if stats[label, cv2.CC_STAT_AREA] >= MIN_CONTACT_PX
+        if stats[label, cv2.CC_STAT_AREA] >= min_contact_px
     )
 
     return {

@@ -79,6 +79,11 @@ from src.pipeline import inspect_pair
 
 CLASSIFIERS = ("descriptor", "connectivity")
 RING_WIDTHS = (2, 3, 4, 6, 8)
+
+# MIN_CONTACT_PX is a pixel *area*, so the value that works at DeepPCB's
+# ~48 px/mm is roughly 25 times too small at HRIPCB's ~5x linear resolution.
+# The range spans both regimes so that one sweep covers either dataset.
+CONTACT_AREAS = (6, 25, 50, 100, 150, 250, 400)
 IOU_THRESHOLDS = (0.33, 0.50)
 
 DATASETS = ("deeppcb", "hripcb", "hripcb-rotated")
@@ -203,8 +208,42 @@ def compare_classifiers(pairs: list[ingest.Pair], dataset: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def sweep_parameter(pairs: list[ingest.Pair],
+                    dataset: str,
+                    attribute: str,
+                    values: tuple[int, ...],
+                    column: str) -> pd.DataFrame:
+    """Sweep one connectivity threshold, restoring it afterwards.
+
+    Both free parameters live as module attributes read at call time, so the
+    sweep sets the attribute rather than threading an argument through the
+    pipeline. The finally block matters: leaving a swept value in place would
+    silently contaminate every later run in the same session.
+    """
+    key = base_name(dataset)
+    baseline = {**BASELINES[key], "copper_is_dark": COPPER_IS_DARK[key]}
+    rows = []
+    original = getattr(connectivity, attribute)
+
+    try:
+        for value in values:
+            setattr(connectivity, attribute, value)
+            evaluation, failures = run_configuration(
+                pairs, {**baseline, "classifier": "connectivity"}, 0.50, dataset
+            )
+            rows.append({"dataset": dataset, column: value,
+                         **evaluation.summary(), "failures": failures})
+            print(f"  {column} {value:>4}   class acc "
+                  f"{rows[-1]['class_accuracy']:.4f}   "
+                  f"cls F1 {rows[-1]['cls_f1']:.4f}")
+    finally:
+        setattr(connectivity, attribute, original)
+
+    return pd.DataFrame(rows)
+
+
 def sweep_ring_width(pairs: list[ingest.Pair], dataset: str) -> pd.DataFrame:
-    """How sensitive the connectivity classifier is to its one free parameter.
+    """How sensitive the connectivity classifier is to the ring width.
 
     A rule set with a parameter that has never been swept is a rule set whose
     result cannot be trusted, so this is reported even though the default is
@@ -217,27 +256,8 @@ def sweep_ring_width(pairs: list[ingest.Pair], dataset: str) -> pd.DataFrame:
     pixels does not transfer across that gap any more than a structuring
     element does.
     """
-    key = base_name(dataset)
-    baseline = {**BASELINES[key], "copper_is_dark": COPPER_IS_DARK[key]}
-    rows = []
-    original = connectivity.RING_WIDTH_PX
-
-    try:
-        for width in RING_WIDTHS:
-            # The rule set reads its default at call time, so the module
-            # attribute is the sweep knob. Restored in the finally block.
-            connectivity.RING_WIDTH_PX = width
-            evaluation, failures = run_configuration(
-                pairs, {**baseline, "classifier": "connectivity"}, 0.50, dataset
-            )
-            rows.append({"dataset": dataset, "ring_width_px": width,
-                         **evaluation.summary(), "failures": failures})
-            print(f"  ring {width:>2} px   class acc "
-                  f"{rows[-1]['class_accuracy']:.4f}")
-    finally:
-        connectivity.RING_WIDTH_PX = original
-
-    return pd.DataFrame(rows)
+    return sweep_parameter(pairs, dataset, "RING_WIDTH_PX",
+                           RING_WIDTHS, "ring_width_px")
 
 
 def main() -> None:
@@ -258,6 +278,13 @@ def main() -> None:
     if mode == "ring":
         save_table(sweep_ring_width(pairs, dataset),
                    f"module3_{dataset}_ring_sweep.csv")
+        return
+
+    if mode == "contact":
+        save_table(
+            sweep_parameter(pairs, dataset, "MIN_CONTACT_PX",
+                            CONTACT_AREAS, "min_contact_px"),
+            f"module3_{dataset}_contact_sweep.csv")
         return
 
     save_table(compare_classifiers(pairs, dataset),
