@@ -1,5 +1,0 @@
-split,classifier,iou_threshold,boards,loc_precision,loc_recall,loc_f1,cls_precision,cls_recall,cls_f1,macro_f1,class_accuracy,mean_iou_matched,mean_runtime_s,max_runtime_s,within_3s_pct,failures,wall_clock_s
-test,descriptor,0.33,80,0.9035,0.7668,0.8295,0.4084,0.3466,0.375,0.3285,0.4521,0.8285,0.0296,0.157,100.0,0,2.4
-test,descriptor,0.5,80,0.8911,0.7563,0.8182,0.4084,0.3466,0.375,0.3285,0.4583,0.8342,0.0279,0.0554,100.0,0,2.3
-test,connectivity,0.33,80,0.9035,0.7668,0.8295,0.8515,0.7227,0.7818,0.7836,0.9425,0.8285,0.0286,0.0558,100.0,0,2.3
-test,connectivity,0.5,80,0.8911,0.7563,0.8182,0.8416,0.7143,0.7727,0.7761,0.9444,0.8342,0.0286,0.0557,100.0,0,2.3
