@@ -1,3 +1,5 @@
+"""Module 3 self-check — is my part actually done?
+
 Owner: Ng Zhi Xuan.
 
 Run this before every checkpoint and before submission:
