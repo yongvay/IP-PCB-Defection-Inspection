@@ -78,12 +78,16 @@ from src.module3.evaluate import Evaluation
 from src.pipeline import inspect_pair
 
 CLASSIFIERS = ("descriptor", "connectivity")
-RING_WIDTHS = (2, 3, 4, 6, 8)
+# Widened after the first pass. The DeepPCB curve was still rising at 8 px,
+# so the original range did not contain its optimum and any value chosen from
+# it would have been an artefact of where the search stopped. The two datasets
+# were subsequently found to prefer opposite ends of this range.
+RING_WIDTHS = (2, 3, 4, 6, 8, 10, 12, 16, 20)
 
 # MIN_CONTACT_PX is a pixel *area*, so the value that works at DeepPCB's
 # ~48 px/mm is roughly 25 times too small at HRIPCB's ~5x linear resolution.
 # The range spans both regimes so that one sweep covers either dataset.
-CONTACT_AREAS = (6, 25, 50, 100, 150, 250, 400)
+CONTACT_AREAS = (2, 6, 12, 25, 50, 75, 100, 150, 250, 400)
 IOU_THRESHOLDS = (0.33, 0.50)
 
 DATASETS = ("deeppcb", "hripcb", "hripcb-rotated")
