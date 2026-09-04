@@ -1,0 +1,2 @@
+iou_threshold,boards,loc_precision,loc_recall,loc_f1,cls_precision,cls_recall,cls_f1,macro_f1,class_accuracy,mean_iou_matched,mean_runtime_s,max_runtime_s,within_3s_pct
+0.5,30,0.2377,0.6692,0.3508,0.0,0.0,0.0,0.0,0.0,0.7254,0.5622,0.7463,100.0

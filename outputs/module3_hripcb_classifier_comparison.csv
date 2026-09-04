@@ -1,0 +1,5 @@
+dataset,classifier,iou_threshold,boards,loc_precision,loc_recall,loc_f1,cls_precision,cls_recall,cls_f1,macro_f1,class_accuracy,mean_iou_matched,mean_runtime_s,max_runtime_s,within_3s_pct,failures,wall_clock_s
+hripcb,descriptor,0.33,30,0.748,0.7308,0.7393,0.0079,0.0077,0.0078,0.0139,0.0105,0.6707,0.6949,1.1766,100.0,0,21.0
+hripcb,descriptor,0.5,30,0.6929,0.6769,0.6848,0.0,0.0,0.0,0.0,0.0,0.7204,0.7188,1.0041,100.0,0,21.7
+hripcb,connectivity,0.33,30,0.748,0.7308,0.7393,0.0315,0.0308,0.0311,0.0389,0.0421,0.6707,0.5925,0.8208,100.0,0,17.8
+hripcb,connectivity,0.5,30,0.6929,0.6769,0.6848,0.0157,0.0154,0.0156,0.0241,0.0227,0.7204,0.6528,1.418,100.0,0,19.7
